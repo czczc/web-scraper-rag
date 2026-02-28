@@ -1,0 +1,10 @@
+[project]
+name = "web-scraper"
+version = "0.1.0"
+description = "Recursively scrape websites to markdown and flatten for AnythingLLM RAG ingestion"
+requires-python = ">=3.12"
+dependencies = [
+    "click>=8.3.1",
+    "crawl4ai>=0.8.0",
+    "tqdm>=4.67.3",
+]
