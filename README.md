@@ -22,36 +22,46 @@ Recursively crawls a site (BFS) and saves each page as a markdown file under `ou
 uv run python scrape.py <URL> [OPTIONS]
 
 Options:
-  -o, --output DIR          Output directory  [default: output]
-  -n, --max-pages INT       Max pages to crawl  [default: 100]
-  -d, --depth INT           Max crawl depth  [default: 10]
-  -s, --css-selector TEXT   CSS selector to restrict extraction to main content,
-                            stripping nav/sidebar/footer entirely.
-  -v, --verbose             Enable verbose output
+  -o, --output DIR              Output directory  [default: output]
+  -n, --max-pages INT           Max pages to crawl  [default: 100]
+  -d, --depth INT               Max crawl depth  [default: 10]
+  -s, --css-selector TEXT       Restrict extraction AND BFS link discovery to a
+                                CSS element. Use when internal nav is INSIDE the
+                                selected element (e.g. MediaWiki).
+  -e, --excluded-selector TEXT  Remove these elements from extracted content while
+                                still discovering links through them. Use when
+                                internal nav is OUTSIDE the content area
+                                (e.g. Jekyll sites with links in <header>).
+  -v, --verbose                 Enable verbose output
 ```
 
 **Example:**
 
 ```bash
-# Scrape a MediaWiki site — use #mw-content-text to skip nav/sidebar
+# MediaWiki — nav is inside #mw-content-text, use --css-selector
 uv run python scrape.py https://www.phy.bnl.gov/computing \
     --max-pages 50 \
     --css-selector "#mw-content-text"
 
-# Scrape a modern site with a <main> content element
-uv run python scrape.py https://docs.example.com \
-    --css-selector "main"
+# Jekyll static site — nav links are in <header>, use --excluded-selector
+# (two-phase: BFS discovers all pages first, then re-fetches with header stripped)
+uv run python scrape.py https://www.phy.bnl.gov/edg/ \
+    --max-pages 50 \
+    --excluded-selector "header, footer"
+
+# No selector — full page content (useful for auditing first)
+uv run python scrape.py https://docs.example.com --max-pages 20
 ```
 
-#### CSS selector by site type
+#### Which option to use?
 
-| Site type | Recommended selector |
-|---|---|
-| MediaWiki | `#mw-content-text` |
-| WordPress | `article`, `.entry-content` |
-| Docusaurus / ReadTheDocs | `article`, `.markdown` |
-| Most modern sites | `main`, `article` |
-| *(none)* | Full page including nav |
+| Scenario | Option | Example |
+|---|---|---|
+| Nav **inside** content area | `--css-selector` | MediaWiki `#mw-content-text` |
+| Nav **outside** content (header/sidebar) | `--excluded-selector` | Jekyll `header, footer, nav` |
+| WordPress / Docs sites | `--css-selector` | `article`, `main`, `.entry-content` |
+| Docusaurus / ReadTheDocs | `--css-selector` | `article`, `.markdown` |
+| No selector | *(none)* | Full page including nav |
 
 ---
 
