@@ -31,6 +31,7 @@ import click
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode
 from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
 from crawl4ai.deep_crawling import BFSDeepCrawlStrategy
+from crawl4ai.deep_crawling.filters import FilterChain, DomainFilter
 
 
 def url_to_filepath(base_url: str, page_url: str, output_dir: Path) -> Path:
@@ -52,6 +53,21 @@ def save_markdown(filepath: Path, url: str, markdown: str) -> None:
     filepath.parent.mkdir(parents=True, exist_ok=True)
     header = f"---\nsource_url: {url}\n---\n\n"
     filepath.write_text(header + markdown, encoding="utf-8")
+
+
+def normalize_url(url: str) -> str:
+    """Canonical form of a URL: lowercase scheme+host, strip trailing slash."""
+    p = urlparse(url)
+    # Drop obviously malformed URLs (e.g. '(http:/...' or missing scheme)
+    if p.scheme not in ("http", "https"):
+        return ""
+    # Drop URLs whose path contains an embedded protocol string — these are
+    # artifacts of malformed href values like href="(http://www.example.com"
+    # Match both :// (double) and :/ (single) variants.
+    if re.search(r"\w+:/", p.path):
+        return ""
+    path = p.path.rstrip("/") or "/"
+    return p._replace(path=path, fragment="").geturl()
 
 
 def in_scope(page_url: str, base_domain: str, base_path: str) -> bool:
@@ -140,12 +156,16 @@ async def _crawl(
 
     if needs_two_phase:
         click.echo("🔍 Phase 1: discovering all pages (full-page BFS)…\n")
+        # Restrict BFS link-following to the same domain so we don't waste
+        # time crawling external sites before our in-scope filter runs.
+        domain_filter = FilterChain([DomainFilter(allowed_domains=[base_domain])])
         discovery_config = CrawlerRunConfig(
             cache_mode=CacheMode.BYPASS,
             markdown_generator=DefaultMarkdownGenerator(),
             deep_crawl_strategy=BFSDeepCrawlStrategy(
                 max_depth=depth,
                 max_pages=max_pages,
+                filter_chain=domain_filter,
             ),
             verbose=verbose,
             stream=True,
@@ -153,10 +173,12 @@ async def _crawl(
         async with AsyncWebCrawler(config=browser_config) as crawler:
             async for result in await crawler.arun(url=url, config=discovery_config):
                 page_url = result.url
-                if in_scope(page_url, base_domain, base_path):
-                    discovered_urls.append(page_url)
-                    if verbose:
-                        click.echo(f"  🔗 Discovered: {page_url}")
+                canonical = normalize_url(page_url)
+                if canonical and in_scope(page_url, base_domain, base_path):
+                    if canonical not in {normalize_url(u) for u in discovered_urls}:
+                        discovered_urls.append(page_url)
+                        if verbose:
+                            click.echo(f"  🔗 Discovered: {page_url}")
 
         click.echo(f"\n  Found {len(discovered_urls)} in-scope page(s).\n")
 
@@ -170,6 +192,7 @@ async def _crawl(
         )
 
         saved = skipped = 0
+        seen_canonical: set[str] = set()
         async with AsyncWebCrawler(config=browser_config) as crawler:
             results = await crawler.arun_many(
                 urls=discovered_urls,
@@ -177,6 +200,13 @@ async def _crawl(
             )
             for result in results:
                 page_url = result.url
+                canonical = normalize_url(page_url)
+                if canonical in seen_canonical:
+                    if verbose:
+                        click.echo(f"  ⏭  Skipping duplicate: {page_url}")
+                    skipped += 1
+                    continue
+                seen_canonical.add(canonical)
                 if not result.success:
                     if verbose:
                         click.echo(f"  ⚠️  Failed: {page_url} — {result.error_message}")
